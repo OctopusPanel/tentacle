@@ -24,8 +24,16 @@ impl WebSocketClient {
 #[async_trait]
 impl PanelClient for WebSocketClient {
     async fn connect(&mut self, node_key: &str) -> Result<bool, String> {
-        // WebSocket URL bauen
-        let url = format!("{}/api/nodes/connect?key={}", self.panel_url, node_key);
+        let ws_url = if self.panel_url.starts_with("http://") {
+            self.panel_url.replace("http://", "ws://")
+        } else if self.panel_url.starts_with("https://") {
+            self.panel_url.replace("https://", "wss://")
+        } else if !self.panel_url.starts_with("ws://") && !self.panel_url.starts_with("wss://") {
+            format!("ws://{}", self.panel_url)
+        } else {
+            self.panel_url.clone()
+        };
+        let url = format!("{}/api/nodes/connect?key={}", ws_url.trim_end_matches('/'), node_key);
         
         use tokio_tungstenite::connect_async;
         let (_ws_stream, response) = connect_async(&url)
