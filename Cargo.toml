@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = "0.1.91"
+bollard = "0.21.0"
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-tungstenite = "0.30.0"
+
+[dev-dependencies]
+mockall = "0.15.0"
