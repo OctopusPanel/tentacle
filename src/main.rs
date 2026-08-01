@@ -10,6 +10,7 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     println!("🐙 Tentacle Daemon booting up...");
 
     let config = loop {
