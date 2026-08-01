@@ -80,6 +80,8 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now tentacle.service
+systemctl restart tentacle.service
 
-echo "✅ Tentacle Daemon installation complete!"
+echo "✅ Tentacle Daemon installation and restart complete!"
 echo "🚀 Status check: systemctl status tentacle.service"
+echo "📡 Check live telemetry logs with: journalctl -u tentacle.service -n 50 --no-pager"
