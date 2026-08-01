@@ -77,7 +77,13 @@ async fn main() {
                 });
 
                 if let Err(e) = client.send_metrics(&status_payload.to_string()).await {
-                    eprintln!("⚠️ Error streaming metrics: {}", e);
+                    eprintln!("⚠️ Error streaming metrics (connection might be dropped): {}. Reconnecting...", e);
+                    if let Err(recon_err) = client.connect(node_key).await {
+                        eprintln!("⚠️ Reconnection attempt failed: {}", recon_err);
+                    } else {
+                        println!("🔄 Successfully reconnected to Octopus Panel!");
+                        let _ = client.send_metrics(&status_payload.to_string()).await;
+                    }
                 }
             }
             Err(e) => {
