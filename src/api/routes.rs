@@ -63,7 +63,9 @@ pub fn create_router(state: AppState) -> Router {
 
     let websocket_route = Router::new().route("/api/servers/{id}/ws", get(ws_handler));
 
-    let public_routes = Router::new().route("/health", get(health_check));
+    let public_routes = Router::new()
+        .route("/health", get(health_check))
+        .route("/api/system/health", get(health_check));
 
     Router::new()
         .merge(public_routes)
