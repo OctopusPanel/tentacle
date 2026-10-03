@@ -1,0 +1,36 @@
+node:
+  id: "node-local-01"
+  name: "Local Tentacle Node"
+  listen_host: "0.0.0.0"
+  listen_port: 8080
+  base_url: null
+
+auth:
+  panel_secret: "change-this-secret-in-production-tentacle-panel-key"
+  token_expiry_secs: 3600
+  jwt_audience: "tentacle-node"
+  jwt_issuer: "octopus-panel"
+
+docker:
+  socket_path: "/var/run/docker.sock"
+  network: "bridge"
+  connection_timeout_secs: 30
+
+storage:
+  volumes_path: "/var/lib/octopus/volumes"
+  backups_path: "/var/lib/octopus/backups"
+  temp_path: "/var/lib/octopus/tmp"
+
+sftp:
+  enabled: true
+  listen_host: "0.0.0.0"
+  listen_port: 2022
+  host_key_path: "./host_key"
+
+resources:
+  default_cpu_limit: null
+  default_memory_limit_mb: null
+  metrics_poll_interval_secs: 2
+
+system:
+  log_level: "info"

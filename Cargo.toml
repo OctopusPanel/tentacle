@@ -1,0 +1,63 @@
+[package]
+name = "tentacle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+async-trait = "0.1"
+bytes = "1.10"
+
+# Docker Engine
+bollard = "0.18"
+
+# HTTP & WebSockets
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "auth", "fs"] }
+
+# SSH / SFTP
+russh = "0.50"
+russh-sftp = "2.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Archive & Compression
+tokio-tar = "0.3"
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zstd"] }
+zip = { version = "2.2", default-features = false, features = ["deflate", "time"] }
+
+# Path & Security
+dunce = "1.0"
+path-clean = "1.0"
+
+# Metrics & System
+sysinfo = "0.33"
+
+# CLI & Config
+clap = { version = "4.5", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Security & Tokens
+jsonwebtoken = "9.3"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.11"
+
+[dev-dependencies]
+tempfile = "3.17"
