@@ -537,3 +537,516 @@ enable_cgroups_grub() {
 }
 
 # ------------------------------------------------------------------------------
+# Stage 3: Container Engine (Docker) Setup ([3/6])
+# ------------------------------------------------------------------------------
+install_docker_engine() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Installing official Docker CE" >> "${LOG_FILE}"
+
+    # Ensure curl is installed
+    if ! command -v curl &>/dev/null; then
+        case "$OS_FAMILY" in
+            debian)
+                apt-get update -qq >> "${LOG_FILE}" 2>&1
+                apt-get install -y -qq curl >> "${LOG_FILE}" 2>&1
+                ;;
+            rhel)
+                $PKG_MANAGER install -y -q curl >> "${LOG_FILE}" 2>&1
+                ;;
+            arch)
+                pacman -Sy --noconfirm curl >> "${LOG_FILE}" 2>&1
+                ;;
+        esac
+    fi
+
+    # Use official Docker convenience script with silent output
+    curl -fsSL https://get.docker.com | sh >> "${LOG_FILE}" 2>&1
+
+    # Start and enable docker
+    systemctl daemon-reload >> "${LOG_FILE}" 2>&1 || true
+    systemctl enable --now docker >> "${LOG_FILE}" 2>&1
+
+    # Wait for docker socket
+    local attempts=0
+    while [ ! -S /var/run/docker.sock ] && [ $attempts -lt 15 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+
+    if [ ! -S /var/run/docker.sock ]; then
+        echo "Docker socket /var/run/docker.sock not available after installation" >> "${LOG_FILE}"
+        return 1
+    fi
+
+    docker info >> "${LOG_FILE}" 2>&1
+}
+
+stage_docker() {
+    # Check if docker is installed and operational
+    if command -v docker &>/dev/null; then
+        if ! systemctl is-active --quiet docker 2>/dev/null; then
+            systemctl start docker >> "${LOG_FILE}" 2>&1 || true
+        fi
+
+        if docker info >> "${LOG_FILE}" 2>&1; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Existing Docker installation verified and running" >> "${LOG_FILE}"
+            return 0
+        fi
+    fi
+
+    # Docker is missing or inactive
+    if [ "$OPT_INSTALL_DOCKER" = false ]; then
+        if [ "$UNATTENDED" = true ]; then
+            show_error_box "[3/6]" "Docker Engine is not installed" "Docker is required to manage server containers. Pass --install-docker to automate installation."
+            exit 1
+        else
+            printf "\n  %s  Docker Engine was not detected on this system.\n" "${GLYPH_WARN}"
+            printf "     Would you like to install the official Docker CE Engine now? [Y/n] "
+            local answer
+            read -r answer
+            answer="${answer:-y}"
+            if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+                show_error_box "[3/6]" "Docker Engine required" "Tentacle requires Docker Engine to provision and run game server containers."
+                exit 1
+            fi
+        fi
+    fi
+
+    if ! run_step "[3/6] Installing official Docker CE Engine" install_docker_engine; then
+        show_error_box "[3/6]" "Docker Engine installation failed" "Unable to install or initialize Docker daemon. Review log for details."
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Stage 4: Tentacle Binary & Storage Provisioning ([4/6])
+# ------------------------------------------------------------------------------
+setup_directories() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up directory hierarchy" >> "${LOG_FILE}"
+    mkdir -p "${CONFIG_DIR}"
+    chmod 0755 "${CONFIG_DIR}"
+
+    local storage="${STORAGE_PATH:-$DEFAULT_STORAGE_PATH}"
+    mkdir -p "${storage}"
+    chmod 0750 "${storage}"
+
+    mkdir -p "${DEFAULT_BACKUPS_PATH}"
+    chmod 0750 "${DEFAULT_BACKUPS_PATH}"
+
+    mkdir -p "${DEFAULT_TMP_PATH}"
+    chmod 0750 "${DEFAULT_TMP_PATH}"
+
+    mkdir -p "${LOG_DIR}"
+    chmod 0755 "${LOG_DIR}"
+
+    mkdir -p "${BINARY_DIR}"
+}
+
+provision_binary() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Provisioning Tentacle binary" >> "${LOG_FILE}"
+
+    # 1. Local binary specified via flag
+    if [ -n "$LOCAL_BINARY" ]; then
+        if [ -f "$LOCAL_BINARY" ]; then
+            echo "Installing binary from specified local path: $LOCAL_BINARY" >> "${LOG_FILE}"
+            install -m 0755 "$LOCAL_BINARY" "${BINARY_PATH}"
+            return 0
+        else
+            echo "Specified --local-binary '$LOCAL_BINARY' not found" >> "${LOG_FILE}"
+            return 1
+        fi
+    fi
+
+    # 2. Local build in workspace (e.g. target/release/tentacle or target/debug/tentacle)
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "${script_dir}/target/release/tentacle" ]; then
+        echo "Found local release binary at ${script_dir}/target/release/tentacle" >> "${LOG_FILE}"
+        install -m 0755 "${script_dir}/target/release/tentacle" "${BINARY_PATH}"
+        return 0
+    elif [ -f "${script_dir}/target/debug/tentacle" ]; then
+        echo "Found local debug binary at ${script_dir}/target/debug/tentacle" >> "${LOG_FILE}"
+        install -m 0755 "${script_dir}/target/debug/tentacle" "${BINARY_PATH}"
+        return 0
+    fi
+
+    # 3. Download from GitHub Releases
+    local tmp_dir
+    tmp_dir="$(mktemp -d /tmp/tentacle-install.XXXXXX)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '${tmp_dir}'" RETURN
+
+    local tag="${TARGET_VERSION}"
+    local download_url=""
+
+    if [ "$tag" = "latest" ]; then
+        download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}.tar.gz"
+    else
+        download_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}.tar.gz"
+    fi
+
+    echo "Attempting download from: ${download_url}" >> "${LOG_FILE}"
+
+    if curl -fsSL "${download_url}" -o "${tmp_dir}/tentacle.tar.gz" >> "${LOG_FILE}" 2>&1; then
+        # Check for optional checksum file
+        local sha_url="${download_url}.sha256"
+        if curl -fsSL "${sha_url}" -o "${tmp_dir}/tentacle.tar.gz.sha256" >> "${LOG_FILE}" 2>&1; then
+            echo "Verifying SHA256 checksum..." >> "${LOG_FILE}"
+            (cd "${tmp_dir}" && sha256sum -c "tentacle.tar.gz.sha256") >> "${LOG_FILE}" 2>&1 || {
+                echo "Checksum verification failed" >> "${LOG_FILE}"
+                return 1
+            }
+        fi
+
+        tar -xzf "${tmp_dir}/tentacle.tar.gz" -C "${tmp_dir}" >> "${LOG_FILE}" 2>&1
+        if [ -f "${tmp_dir}/tentacle" ]; then
+            install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+            return 0
+        fi
+    fi
+
+    # 4. Fallback: Direct binary release download
+    local direct_url=""
+    if [ "$tag" = "latest" ]; then
+        direct_url="https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}"
+    else
+        direct_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}"
+    fi
+
+    echo "Attempting direct binary download from: ${direct_url}" >> "${LOG_FILE}"
+    if curl -fsSL "${direct_url}" -o "${tmp_dir}/tentacle" >> "${LOG_FILE}" 2>&1; then
+        install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+        return 0
+    fi
+
+    # 5. Fallback: Build with local Cargo if available in repository
+    if [ -f "${script_dir}/Cargo.toml" ] && command -v cargo &>/dev/null; then
+        echo "Building release binary via local Cargo..." >> "${LOG_FILE}"
+        cargo build --release --manifest-path "${script_dir}/Cargo.toml" >> "${LOG_FILE}" 2>&1
+        if [ -f "${script_dir}/target/release/tentacle" ]; then
+            install -m 0755 "${script_dir}/target/release/tentacle" "${BINARY_PATH}"
+            return 0
+        fi
+    fi
+
+    echo "Failed to acquire Tentacle binary through release downloads or local builds." >> "${LOG_FILE}"
+    return 1
+}
+
+stage_provisioning() {
+    setup_directories
+
+    if ! run_step "[4/6] Provisioning Tentacle binary & storage structure" provision_binary; then
+        show_error_box "[4/6]" "Binary provisioning failed" "Could not download or install the Tentacle binary for architecture ${ARCH}. Check internet connection or specify --local-binary."
+        exit 1
+    fi
+
+    # Verify execution permissions and binary integrity
+    chmod 0755 "${BINARY_PATH}"
+    if ! "${BINARY_PATH}" --help >> "${LOG_FILE}" 2>&1; then
+        show_error_box "[4/6]" "Binary verification failed" "The installed binary at ${BINARY_PATH} failed to execute properly."
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Stage 5: Node Configuration Wizard ([5/6])
+# ------------------------------------------------------------------------------
+stage_config_wizard() {
+    # If interactive and missing panel-url or token, offer 1-click token string paste
+    if [ "$UNATTENDED" = false ] && { [ -z "$PANEL_URL" ] || [ -z "$NODE_TOKEN" ]; }; then
+        printf "\n"
+        printf "  %s  ${CLR_BOLD}OctopusPanel Node Configuration${CLR_RESET}\n" "${GLYPH_PROMPT}"
+        printf "     ${CLR_GRAY}Paste the 1-click setup string from OctopusPanel UI, or press Enter for step-by-step setup:${CLR_RESET}\n"
+        printf "     > "
+        local quick_input
+        read -r quick_input
+        if [ -n "$quick_input" ]; then
+            parse_quick_input "$quick_input"
+        fi
+    fi
+
+    # Interactive Step-by-Step Prompts if parameters are still missing
+    if [ "$UNATTENDED" = false ]; then
+        # 1. Panel URL
+        while [ -z "$PANEL_URL" ]; do
+            printf "  %s  Panel URL (e.g., https://panel.example.com): " "${GLYPH_PROMPT}"
+            read -r PANEL_URL
+            if [ -n "$PANEL_URL" ]; then
+                if [[ ! "$PANEL_URL" =~ ^https?:// ]]; then
+                    printf "     ${CLR_YELLOW}Panel URL must start with http:// or https://${CLR_RESET}\n"
+                    PANEL_URL=""
+                fi
+            fi
+        done
+
+        # 2. Node Authentication Token
+        while [ -z "$NODE_TOKEN" ]; do
+            printf "  %s  Node Authentication Secret / Token: " "${GLYPH_PROMPT}"
+            read -r NODE_TOKEN
+            if [ -z "$NODE_TOKEN" ]; then
+                printf "     ${CLR_YELLOW}Authentication token cannot be empty.${CLR_RESET}\n"
+            fi
+        done
+
+        # 3. API Port
+        if [ -z "$API_PORT" ]; then
+            printf "  %s  API Listen Port [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_API_PORT}"
+            read -r input_port
+            API_PORT="${input_port:-$DEFAULT_API_PORT}"
+        fi
+
+        # 4. SFTP Port
+        if [ -z "$SFTP_PORT" ]; then
+            printf "  %s  SFTP Listen Port [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_SFTP_PORT}"
+            read -r input_sftp
+            SFTP_PORT="${input_sftp:-$DEFAULT_SFTP_PORT}"
+        fi
+
+        # 5. Storage Path
+        if [ -z "$STORAGE_PATH" ]; then
+            printf "  %s  Container Storage Root [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_STORAGE_PATH}"
+            read -r input_storage
+            STORAGE_PATH="${input_storage:-$DEFAULT_STORAGE_PATH}"
+        fi
+    fi
+
+    # Apply defaults if still unset (e.g. Unattended mode with optional flags omitted)
+    API_PORT="${API_PORT:-$DEFAULT_API_PORT}"
+    SFTP_PORT="${SFTP_PORT:-$DEFAULT_SFTP_PORT}"
+    STORAGE_PATH="${STORAGE_PATH:-$DEFAULT_STORAGE_PATH}"
+
+    # Validation in unattended mode
+    if [ -z "$PANEL_URL" ] || [ -z "$NODE_TOKEN" ]; then
+        show_error_box "[5/6]" "Missing configuration parameters" "Both --panel-url and --token must be supplied in unattended mode."
+        exit 1
+    fi
+
+    # Node ID and Node Name defaults
+    if [ -z "$NODE_ID" ]; then
+        local machine_id=""
+        if [ -f /etc/machine-id ]; then
+            machine_id="$(head -c 8 /etc/machine-id 2>/dev/null || true)"
+        fi
+        if [ -z "$machine_id" ]; then
+            machine_id="$(hostname -s 2>/dev/null || echo "01")"
+        fi
+        NODE_ID="node-${machine_id}"
+    fi
+
+    if [ -z "$NODE_NAME" ]; then
+        local host_display
+        host_display="$(hostname -f 2>/dev/null || hostname -s 2>/dev/null || echo "node")"
+        NODE_NAME="Tentacle Node (${host_display})"
+    fi
+
+    # Backup existing configuration if present
+    if [ -f "${CONFIG_FILE}" ]; then
+        local backup_path="${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+        echo "Backing up existing config to ${backup_path}" >> "${LOG_FILE}"
+        cp "${CONFIG_FILE}" "${backup_path}"
+    fi
+
+    # Generate tentacle.yaml
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Generating configuration at ${CONFIG_FILE}" >> "${LOG_FILE}"
+    cat <<EOF > "${CONFIG_FILE}"
+# ==============================================================================
+#  Tentacle Node Daemon Configuration
+#  Generated by Tentacle Installer ${INSTALLER_VERSION} on $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# ==============================================================================
+
+node:
+  id: "${NODE_ID}"
+  name: "${NODE_NAME}"
+  listen_host: "0.0.0.0"
+  listen_port: ${API_PORT}
+  base_url: "${PANEL_URL}"
+
+auth:
+  panel_secret: "${NODE_TOKEN}"
+  token_expiry_secs: 3600
+  jwt_audience: "tentacle-node"
+  jwt_issuer: "octopus-panel"
+
+docker:
+  socket_path: "/var/run/docker.sock"
+  network: "bridge"
+  connection_timeout_secs: 30
+
+storage:
+  volumes_path: "${STORAGE_PATH}"
+  backups_path: "${DEFAULT_BACKUPS_PATH}"
+  temp_path: "${DEFAULT_TMP_PATH}"
+
+sftp:
+  enabled: true
+  listen_host: "0.0.0.0"
+  listen_port: ${SFTP_PORT}
+  host_key_path: "${CONFIG_DIR}/host_key"
+
+resources:
+  default_cpu_limit: null
+  default_memory_limit_mb: null
+  metrics_poll_interval_secs: 2
+
+system:
+  log_level: "info"
+EOF
+
+    chmod 0600 "${CONFIG_FILE}"
+    printf "  %s  %s\n" "${GLYPH_SUCCESS}" "[5/6] Node configuration generated securely (${CONFIG_FILE})"
+}
+
+# ------------------------------------------------------------------------------
+# Stage 6: Firewall & Systemd Service ([6/6])
+# ------------------------------------------------------------------------------
+configure_firewall() {
+    local configured=false
+
+    # 1. UFW Check
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qw "active"; then
+        local should_open=false
+        if [ "$OPT_CONFIGURE_FIREWALL" = true ]; then
+            should_open=true
+        elif [ "$UNATTENDED" = false ]; then
+            printf "  %s  Active UFW firewall detected. Open ports %s (API) and %s (SFTP)? [Y/n] " "${GLYPH_PROMPT}" "${API_PORT}" "${SFTP_PORT}"
+            local ans
+            read -r ans
+            ans="${ans:-y}"
+            [[ "$ans" =~ ^[Yy]$ ]] && should_open=true
+        fi
+
+        if [ "$should_open" = true ]; then
+            echo "Opening UFW ports: ${API_PORT}/tcp, ${SFTP_PORT}/tcp" >> "${LOG_FILE}"
+            ufw allow "${API_PORT}/tcp" comment "Octopus Tentacle API" >> "${LOG_FILE}" 2>&1 || true
+            ufw allow "${SFTP_PORT}/tcp" comment "Octopus Tentacle SFTP" >> "${LOG_FILE}" 2>&1 || true
+            configured=true
+        fi
+    fi
+
+    # 2. Firewalld Check
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state 2>/dev/null | grep -qw "running"; then
+        local should_open=false
+        if [ "$OPT_CONFIGURE_FIREWALL" = true ]; then
+            should_open=true
+        elif [ "$UNATTENDED" = false ] && [ "$configured" = false ]; then
+            printf "  %s  Active firewalld detected. Open ports %s (API) and %s (SFTP)? [Y/n] " "${GLYPH_PROMPT}" "${API_PORT}" "${SFTP_PORT}"
+            local ans
+            read -r ans
+            ans="${ans:-y}"
+            [[ "$ans" =~ ^[Yy]$ ]] && should_open=true
+        fi
+
+        if [ "$should_open" = true ]; then
+            echo "Opening firewalld ports: ${API_PORT}/tcp, ${SFTP_PORT}/tcp" >> "${LOG_FILE}"
+            firewall-cmd --permanent --add-port="${API_PORT}/tcp" >> "${LOG_FILE}" 2>&1 || true
+            firewall-cmd --permanent --add-port="${SFTP_PORT}/tcp" >> "${LOG_FILE}" 2>&1 || true
+            firewall-cmd --reload >> "${LOG_FILE}" 2>&1 || true
+            configured=true
+        fi
+    fi
+
+    return 0
+}
+
+setup_systemd_service() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Installing systemd unit file at ${SYSTEMD_SERVICE_FILE}" >> "${LOG_FILE}"
+
+    cat <<EOF > "${SYSTEMD_SERVICE_FILE}"
+[Unit]
+Description=Tentacle - High-Performance Node Daemon for OctopusPanel
+Documentation=https://github.com/${GITHUB_REPO}
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${CONFIG_DIR}
+ExecStart=${BINARY_PATH} --config ${CONFIG_FILE}
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tentacle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    chmod 0644 "${SYSTEMD_SERVICE_FILE}"
+    systemctl daemon-reload >> "${LOG_FILE}" 2>&1
+    systemctl enable --now tentacle >> "${LOG_FILE}" 2>&1
+}
+
+verify_daemon_health() {
+    local attempts=0
+    local max_attempts=15
+    local health_url="http://127.0.0.1:${API_PORT}/api/system/health"
+    local fallback_url="http://127.0.0.1:${API_PORT}/health"
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Polling daemon health endpoint at ${health_url}" >> "${LOG_FILE}"
+
+    while [ $attempts -lt $max_attempts ]; do
+        if curl -fsSL -m 2 "${health_url}" >> "${LOG_FILE}" 2>&1 || curl -fsSL -m 2 "${fallback_url}" >> "${LOG_FILE}" 2>&1; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Health check passed successfully" >> "${LOG_FILE}"
+            return 0
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+
+    echo "Health check polling timed out after ${max_attempts} attempts" >> "${LOG_FILE}"
+    journalctl -u tentacle -n 15 --no-pager >> "${LOG_FILE}" 2>&1 || true
+    return 1
+}
+
+stage_systemd_and_firewall() {
+    configure_firewall
+
+    if ! run_step "[6/6] Configuring systemd service & launching daemon" setup_systemd_service; then
+        show_error_box "[6/6]" "Failed to register or start systemd service" "systemctl enable --now tentacle failed. Check journalctl -u tentacle."
+        exit 1
+    fi
+
+    if ! run_step "[6/6] Verifying local daemon health check" verify_daemon_health; then
+        show_error_box "[6/6]" "Health check failed" "Tentacle daemon did not respond at http://127.0.0.1:${API_PORT}/api/system/health within 15 seconds."
+        exit 1
+    fi
+}
+
+# ==============================================================================
+# Main Orchestrator
+# ==============================================================================
+main() {
+    parse_args "$@"
+
+    # Stage 1: Pre-flight & System Detection
+    stage_preflight
+
+    # Display stylized ASCII header after pre-flight resolves version and arch
+    render_header "${INSTALLER_VERSION}" "${ARCH}"
+    printf "  %s  %s\n" "${GLYPH_SUCCESS}" "[1/6] Pre-flight system detection passed (${DISTRO_NAME}, ${ARCH})"
+
+    # Stage 2: Kernel & Cgroups v2 Check
+    stage_cgroups
+    printf "  %s  %s\n" "${GLYPH_SUCCESS}" "[2/6] Kernel & Cgroups configuration verified"
+
+    # Stage 3: Container Engine (Docker) Setup
+    stage_docker
+    printf "  %s  %s\n" "${GLYPH_SUCCESS}" "[3/6] Container Engine (Docker) active and operational"
+
+    # Stage 4: Tentacle Binary & Storage Provisioning
+    stage_provisioning
+
+    # Stage 5: Node Configuration Wizard
+    stage_config_wizard
+
+    # Stage 6: Firewall & Systemd Service
+    stage_systemd_and_firewall
+
+    # Render success banner
+    show_success_box "${API_PORT}" "${SFTP_PORT}" "${CONFIG_FILE}"
+}
+
+main "$@"
