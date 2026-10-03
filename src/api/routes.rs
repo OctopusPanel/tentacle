@@ -25,6 +25,7 @@ pub fn create_router(state: AppState) -> Router {
         // System
         .route("/api/system", get(system::get_system_status))
         .route("/api/system/metrics", get(system::get_system_metrics))
+        .route("/api/system/update", post(system::trigger_system_update))
         // Servers
         .route(
             "/api/servers",

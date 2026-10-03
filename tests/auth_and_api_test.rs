@@ -112,4 +112,15 @@ async fn test_api_public_health_and_protected_routes() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["node_id"], "node-local-01");
+
+    // 4. Update route without auth (should return 403 Forbidden)
+    let req = Request::builder()
+        .uri("/api/system/update")
+        .method("POST")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"targetVersion":"v0.2.0","sha256":"abc","downloadUrl":"http://example.com"}"#))
+        .unwrap();
+
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
