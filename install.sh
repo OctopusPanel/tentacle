@@ -54,15 +54,15 @@ TARGET_ARCH=""
 # Color Palette & Typography
 # ------------------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    CLR_RESET="\033[0m"
-    CLR_BOLD="\033[1m"
-    CLR_DIM="\033[2m"
-    CLR_CYAN="\033[38;2;0;240;255m"      # #00F0FF / ANSI 14
-    CLR_PURPLE="\033[38;2;189;147;249m"  # #BD93F9 / ANSI 13
-    CLR_GREEN="\033[38;2;80;250;123m"    # #50FA7B / ANSI 10
-    CLR_YELLOW="\033[38;2;241;250;140m"  # #F1FA8C / ANSI 11
-    CLR_RED="\033[38;2;255;85;85m"       # #FF5555 / ANSI 9
-    CLR_GRAY="\033[38;2;98;114;164m"     # #6272A4 / ANSI 8
+    CLR_RESET=$'\033[0m'
+    CLR_BOLD=$'\033[1m'
+    CLR_DIM=$'\033[2m'
+    CLR_CYAN=$'\033[38;2;0;240;255m'      # #00F0FF / ANSI 14
+    CLR_PURPLE=$'\033[38;2;189;147;249m'  # #BD93F9 / ANSI 13
+    CLR_GREEN=$'\033[38;2;80;250;123m'    # #50FA7B / ANSI 10
+    CLR_YELLOW=$'\033[38;2;241;250;140m'  # #F1FA8C / ANSI 11
+    CLR_RED=$'\033[38;2;255;85;85m'       # #FF5555 / ANSI 9
+    CLR_GRAY=$'\033[38;2;98;114;164m'     # #6272A4 / ANSI 8
 else
     CLR_RESET=""
     CLR_BOLD=""
