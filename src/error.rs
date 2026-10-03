@@ -40,6 +40,9 @@ pub enum TentacleError {
 
     #[error("Internal daemon error: {0}")]
     Internal(String),
+
+    #[error("Update error: {0}")]
+    Update(String),
 }
 
 impl IntoResponse for TentacleError {
@@ -52,7 +55,7 @@ impl IntoResponse for TentacleError {
                 (StatusCode::FORBIDDEN, self.to_string())
             }
             TentacleError::QuotaExceeded(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
-            TentacleError::InvalidState(_) | TentacleError::Config(_) => {
+            TentacleError::InvalidState(_) | TentacleError::Config(_) | TentacleError::Update(_) => {
                 (StatusCode::BAD_REQUEST, self.to_string())
             }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),

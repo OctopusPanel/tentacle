@@ -27,3 +27,15 @@ pub async fn get_system_metrics(
     let snapshot = monitor.snapshot();
     Ok(Json(snapshot))
 }
+
+pub async fn trigger_system_update(
+    State(_state): State<AppState>,
+    Json(payload): Json<crate::core::updater::UpdatePayload>,
+) -> Result<Json<Value>, TentacleError> {
+    let result = crate::core::updater::TentacleUpdater::apply_update(&payload).await?;
+    Ok(Json(json!({
+        "success": result.success,
+        "message": result.message,
+        "target_version": result.target_version,
+    })))
+}
