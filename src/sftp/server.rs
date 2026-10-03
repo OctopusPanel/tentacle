@@ -122,6 +122,7 @@ pub struct SftpClientHandler {
     channel: Option<Channel<Msg>>,
 }
 
+#[allow(clippy::manual_async_fn)]
 impl Handler for SftpClientHandler {
     type Error = russh::Error;
 

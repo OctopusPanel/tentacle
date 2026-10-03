@@ -43,6 +43,7 @@ impl SftpSessionHandler {
     }
 }
 
+#[allow(clippy::manual_async_fn)]
 impl Handler for SftpSessionHandler {
     type Error = StatusCode;
 

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::TentacleError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub node: NodeConfig,
@@ -178,19 +178,6 @@ impl Default for SystemConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            node: NodeConfig::default(),
-            auth: AuthConfig::default(),
-            docker: DockerConfig::default(),
-            storage: StorageConfig::default(),
-            sftp: SftpConfig::default(),
-            resources: ResourceConfig::default(),
-            system: SystemConfig::default(),
-        }
-    }
-}
 
 impl Config {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, TentacleError> {
