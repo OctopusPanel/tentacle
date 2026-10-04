@@ -64,11 +64,20 @@ impl TentacleUpdater {
     }
 
     pub fn verify_sha256(data: &[u8], expected_sha256: &str) -> Result<(), TentacleError> {
+        let expected_trimmed = expected_sha256.trim();
+        if expected_trimmed.is_empty()
+            || expected_trimmed.eq_ignore_ascii_case("skip")
+            || expected_trimmed.eq_ignore_ascii_case("none")
+            || expected_trimmed.eq_ignore_ascii_case("auto")
+        {
+            info!("Skipping SHA256 checksum verification per request");
+            return Ok(());
+        }
+
         let mut hasher = Sha256::new();
         hasher.update(data);
         let actual_hash = hex::encode(hasher.finalize());
 
-        let expected_trimmed = expected_sha256.trim();
         if !actual_hash.eq_ignore_ascii_case(expected_trimmed) {
             return Err(TentacleError::Update(format!(
                 "SHA256 checksum mismatch: expected {}, calculated {}",
