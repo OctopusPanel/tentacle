@@ -161,7 +161,10 @@ impl ContainerEngine {
             &config.environment,
         );
 
-        let env = EnvironmentInterpolator::to_docker_env(&config.environment);
+        let mut env = EnvironmentInterpolator::to_docker_env(&config.environment);
+        if !env.iter().any(|e| e.starts_with("STARTUP=")) {
+            env.push(format!("STARTUP={}", interpolated_cmd));
+        }
 
         let mut labels = HashMap::new();
         labels.insert("octopus.server.id".to_string(), config.id.clone());

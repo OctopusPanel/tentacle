@@ -47,8 +47,16 @@ impl SandboxedFs {
     pub fn resolve_safe_path<P: AsRef<Path>>(&self, user_path: P) -> Result<PathBuf, TentacleError> {
         let p = user_path.as_ref();
 
+        let normalized = if let Ok(stripped) = p.strip_prefix("/home/container") {
+            stripped
+        } else if let Ok(stripped) = p.strip_prefix("home/container") {
+            stripped
+        } else {
+            p
+        };
+
         let mut cleaned_relative = PathBuf::new();
-        for component in p.components() {
+        for component in normalized.components() {
             match component {
                 Component::Normal(c) => cleaned_relative.push(c),
                 Component::CurDir => {}
