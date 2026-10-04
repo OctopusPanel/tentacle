@@ -135,11 +135,14 @@ pub async fn install_server(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, TentacleError> {
     let server = state.get_server(&id).await?;
-    let install_config = {
+    let (install_config, env) = {
         let cfg = server.config.read().await;
-        cfg.install_config.clone().ok_or_else(|| {
-            TentacleError::Config("Server has no install configuration defined".to_string())
-        })?
+        (
+            cfg.install_config.clone().ok_or_else(|| {
+                TentacleError::Config("Server has no install configuration defined".to_string())
+            })?,
+            cfg.environment.clone(),
+        )
     };
 
     server.set_status(ServerStatus::Installing).await;
@@ -150,7 +153,7 @@ pub async fn install_server(
     let server_id = id.clone();
 
     tokio::spawn(async move {
-        match docker.run_install_pipeline(&server_id, &install_config, &volume_path).await {
+        match docker.run_install_pipeline(&server_id, &install_config, &volume_path, &env).await {
             Ok(_) => {
                 server_clone.set_status(ServerStatus::Offline).await;
             }
