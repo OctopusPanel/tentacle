@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use tokio_tar::Archive as AsyncTarArchive;
 use async_compression::tokio::bufread::GzipDecoder;
 use tracing::info;
+#[cfg(unix)]
+use tracing::{error, warn};
 
 use crate::error::TentacleError;
 
