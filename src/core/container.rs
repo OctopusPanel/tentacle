@@ -196,10 +196,34 @@ impl ContainerEngine {
             platform: None,
         };
 
-        let response = self
+        let response = match self
             .client
-            .create_container(Some(options), container_config)
-            .await?;
+            .create_container(Some(options.clone()), container_config.clone())
+            .await
+        {
+            Ok(res) => res,
+            Err(bollard::errors::Error::DockerResponseServerError { status_code: 409, .. }) => {
+                warn!(
+                    "Container conflict for '{}', force removing stale container and retrying...",
+                    container_name
+                );
+                let _ = self
+                    .client
+                    .remove_container(
+                        &container_name,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                self.client
+                    .create_container(Some(options), container_config)
+                    .await?
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         Ok(response.id)
     }
