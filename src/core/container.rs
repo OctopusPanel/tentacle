@@ -5,9 +5,10 @@ use bollard::container::{
     ListContainersOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
     WaitContainerOptions,
 };
+use bollard::image::CreateImageOptions;
 use bollard::models::{HostConfig, PortBinding};
 use bollard::Docker;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use tracing::{error, info, warn};
 
 use crate::config::DockerConfig;
@@ -66,11 +67,39 @@ impl ContainerEngine {
         }
     }
 
+    pub async fn ensure_image(&self, image: &str) -> Result<(), TentacleError> {
+        let image = image.trim();
+        if image.is_empty() {
+            return Err(TentacleError::Config("Docker image name cannot be empty".to_string()));
+        }
+
+        if self.client.inspect_image(image).await.is_ok() {
+            return Ok(());
+        }
+
+        info!("Image '{}' not found locally. Pulling image via Docker API...", image);
+        let options = Some(CreateImageOptions {
+            from_image: image,
+            ..Default::default()
+        });
+
+        let mut stream = self.client.create_image(options, None, None);
+        while let Some(msg) = stream.try_next().await? {
+            if let Some(status) = msg.status {
+                tracing::debug!("[Docker Pull] {}", status);
+            }
+        }
+        info!("Successfully pulled Docker image '{}'", image);
+        Ok(())
+    }
+
     pub async fn create_game_container(
         &self,
         config: &ServerConfig,
         volume_path: &Path,
     ) -> Result<String, TentacleError> {
+        self.ensure_image(&config.docker_image).await?;
+
         let container_name = format!("octopus-{}", config.id);
 
         let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
@@ -220,6 +249,8 @@ impl ContainerEngine {
         volume_path: &Path,
     ) -> Result<(), TentacleError> {
         info!("Running installation pipeline for server {}", server_id);
+        self.ensure_image(&install_config.image).await?;
+
         let install_name = format!("octopus-install-{}", server_id);
 
         let volume_bind = format!("{}:/mnt/server:rw", volume_path.to_string_lossy());
