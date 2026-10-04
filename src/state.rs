@@ -49,7 +49,7 @@ impl AppState {
             return session.clone();
         }
 
-        let (session, _) = StreamSession::new(1000);
+        let session = StreamSession::new(1000);
         let session_arc = Arc::new(session);
         map.insert(id.to_string(), session_arc.clone());
         session_arc
@@ -83,7 +83,6 @@ impl AppState {
 
         let server_id = server.config.read().await.id.clone();
         let session = self.get_or_create_stream(&server_id).await;
-        let (_, stdin_rx) = tokio::sync::mpsc::channel(128);
         let docker_client = self.docker.client().clone();
         let server_clone = server.clone();
         let session_clone = session.clone();
@@ -95,7 +94,6 @@ impl AppState {
                 &cid_clone,
                 server_clone,
                 session_clone,
-                stdin_rx,
             )
             .await;
         });
@@ -124,8 +122,7 @@ impl AppState {
         map.insert(config.id.clone(), server.clone());
 
         // Initialize stream session
-        let (session, stdin_rx) = StreamSession::new(1000);
-        let session = Arc::new(session);
+        let session = Arc::new(StreamSession::new(1000));
 
         {
             let mut streams = self.streams.write().await;
@@ -143,7 +140,6 @@ impl AppState {
             &cid,
             server.clone(),
             session,
-            stdin_rx,
         )
         .await;
 
@@ -243,8 +239,7 @@ impl AppState {
                     server.set_status(status).await;
 
                     // Initialize stream session
-                    let (session, stdin_rx) = StreamSession::new(1000);
-                    let session = Arc::new(session);
+                    let session = Arc::new(StreamSession::new(1000));
                     {
                         let mut streams = self.streams.write().await;
                         streams.insert(server_id.clone(), session.clone());
@@ -255,7 +250,6 @@ impl AppState {
                         &cid,
                         server.clone(),
                         session,
-                        stdin_rx,
                     )
                     .await;
                 }

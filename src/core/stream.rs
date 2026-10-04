@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info};
 
 use crate::core::server::{Server, ServerStatus};
@@ -88,23 +88,20 @@ pub enum LogEvent {
 pub struct StreamSession {
     pub buffer: Arc<RwLock<CircularBuffer>>,
     pub broadcast_tx: broadcast::Sender<StreamMessage>,
-    pub stdin_tx: mpsc::Sender<String>,
+    pub stdin_tx: broadcast::Sender<String>,
 }
 
 impl StreamSession {
-    pub fn new(capacity: usize) -> (Self, mpsc::Receiver<String>) {
+    pub fn new(capacity: usize) -> Self {
         let buffer = Arc::new(RwLock::new(CircularBuffer::new(capacity)));
         let (broadcast_tx, _) = broadcast::channel(512);
-        let (stdin_tx, stdin_rx) = mpsc::channel(128);
+        let (stdin_tx, _) = broadcast::channel(128);
 
-        (
-            Self {
-                buffer,
-                broadcast_tx,
-                stdin_tx,
-            },
-            stdin_rx,
-        )
+        Self {
+            buffer,
+            broadcast_tx,
+            stdin_tx,
+        }
     }
 
     pub async fn attach_and_run(
@@ -112,7 +109,6 @@ impl StreamSession {
         container_id: &str,
         server: Arc<Server>,
         session: Arc<StreamSession>,
-        mut stdin_rx: mpsc::Receiver<String>,
     ) -> Result<(), TentacleError> {
         let options = AttachContainerOptions::<String> {
             stdin: Some(true),
@@ -129,8 +125,9 @@ impl StreamSession {
         } = docker.attach_container(container_id, Some(options)).await?;
 
         // Stdin forwarding task
+        let mut stdin_rx = session.stdin_tx.subscribe();
         tokio::spawn(async move {
-            while let Some(command) = stdin_rx.recv().await {
+            while let Ok(command) = stdin_rx.recv().await {
                 let cmd_with_newline = if command.ends_with('\n') {
                     command
                 } else {
