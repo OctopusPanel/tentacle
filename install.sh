@@ -54,15 +54,15 @@ TARGET_ARCH=""
 # Color Palette & Typography
 # ------------------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    CLR_RESET="\033[0m"
-    CLR_BOLD="\033[1m"
-    CLR_DIM="\033[2m"
-    CLR_CYAN="\033[38;2;0;240;255m"      # #00F0FF / ANSI 14
-    CLR_PURPLE="\033[38;2;189;147;249m"  # #BD93F9 / ANSI 13
-    CLR_GREEN="\033[38;2;80;250;123m"    # #50FA7B / ANSI 10
-    CLR_YELLOW="\033[38;2;241;250;140m"  # #F1FA8C / ANSI 11
-    CLR_RED="\033[38;2;255;85;85m"       # #FF5555 / ANSI 9
-    CLR_GRAY="\033[38;2;98;114;164m"     # #6272A4 / ANSI 8
+    CLR_RESET=$'\033[0m'
+    CLR_BOLD=$'\033[1m'
+    CLR_DIM=$'\033[2m'
+    CLR_CYAN=$'\033[38;2;0;240;255m'      # #00F0FF / ANSI 14
+    CLR_PURPLE=$'\033[38;2;189;147;249m'  # #BD93F9 / ANSI 13
+    CLR_GREEN=$'\033[38;2;80;250;123m'    # #50FA7B / ANSI 10
+    CLR_YELLOW=$'\033[38;2;241;250;140m'  # #F1FA8C / ANSI 11
+    CLR_RED=$'\033[38;2;255;85;85m'       # #FF5555 / ANSI 9
+    CLR_GRAY=$'\033[38;2;98;114;164m'     # #6272A4 / ANSI 8
 else
     CLR_RESET=""
     CLR_BOLD=""
@@ -284,7 +284,7 @@ parse_args() {
                 NODE_TOKEN="$2"
                 shift 2
                 ;;
-            --api-port)
+            --api-port|--port)
                 API_PORT="$2"
                 shift 2
                 ;;
@@ -351,8 +351,8 @@ parse_quick_input() {
         NODE_TOKEN="${BASH_REMATCH[2]:-${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}}"
     fi
 
-    if [[ "$input" =~ --api-port[[:space:]=]+([0-9]+) ]]; then
-        API_PORT="${BASH_REMATCH[1]}"
+    if [[ "$input" =~ (--api-port|--port)[[:space:]=]+([0-9]+) ]]; then
+        API_PORT="${BASH_REMATCH[2]}"
     fi
 
     if [[ "$input" =~ --sftp-port[[:space:]=]+([0-9]+) ]]; then
@@ -489,8 +489,12 @@ stage_cgroups() {
 
     if [ "$UNATTENDED" = false ] && [ -f /etc/default/grub ]; then
         printf "     Would you like the installer to enable Cgroups v2 in /etc/default/grub? [Y/n] "
-        local answer
-        read -r answer
+        local answer=""
+        if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+            read -r answer </dev/tty || true
+        else
+            read -r answer || true
+        fi
         answer="${answer:-y}"
         if [[ "$answer" =~ ^[Yy]$ ]]; then
             enable_cgroups_grub
@@ -601,8 +605,12 @@ stage_docker() {
         else
             printf "\n  %s  Docker Engine was not detected on this system.\n" "${GLYPH_WARN}"
             printf "     Would you like to install the official Docker CE Engine now? [Y/n] "
-            local answer
-            read -r answer
+            local answer=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r answer </dev/tty || true
+            else
+                read -r answer || true
+            fi
             answer="${answer:-y}"
             if [[ ! "$answer" =~ ^[Yy]$ ]]; then
                 show_error_box "[3/6]" "Docker Engine required" "Tentacle requires Docker Engine to provision and run game server containers."
@@ -725,6 +733,40 @@ provision_binary() {
         if [ -f "${script_dir}/target/release/tentacle" ]; then
             install -m 0755 "${script_dir}/target/release/tentacle" "${BINARY_PATH}"
             return 0
+        fi
+    fi
+
+    # 6. Fallback: Automated build via cargo from GitHub repository
+    echo "Attempting to build Tentacle from git repository..." >> "${LOG_FILE}"
+    if ! command -v cargo &>/dev/null && [ ! -f "${HOME}/.cargo/bin/cargo" ]; then
+        echo "Cargo not found. Provisioning minimal Rust compiler toolchain..." >> "${LOG_FILE}"
+        case "$OS_FAMILY" in
+            debian)
+                apt-get update -qq >> "${LOG_FILE}" 2>&1 || true
+                apt-get install -y -qq build-essential pkg-config libssl-dev git curl >> "${LOG_FILE}" 2>&1 || true
+                ;;
+            rhel)
+                $PKG_MANAGER install -y -q gcc make pkgconfig openssl-devel git curl >> "${LOG_FILE}" 2>&1 || true
+                ;;
+            arch)
+                pacman -Sy --noconfirm base-devel git curl >> "${LOG_FILE}" 2>&1 || true
+                ;;
+        esac
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal >> "${LOG_FILE}" 2>&1 || true
+        export PATH="${HOME}/.cargo/bin:${PATH}"
+    fi
+
+    local cargo_cmd="cargo"
+    if [ -f "${HOME}/.cargo/bin/cargo" ]; then
+        cargo_cmd="${HOME}/.cargo/bin/cargo"
+    fi
+
+    if command -v "${cargo_cmd}" &>/dev/null || [ -x "${cargo_cmd}" ]; then
+        echo "Executing cargo install for https://github.com/${GITHUB_REPO}..." >> "${LOG_FILE}"
+        if "${cargo_cmd}" install --git "https://github.com/${GITHUB_REPO}" --root /usr/local >> "${LOG_FILE}" 2>&1; then
+            if [ -f "${BINARY_PATH}" ]; then
+                return 0
+            fi
         fi
     fi
 
@@ -909,8 +951,12 @@ configure_firewall() {
             should_open=true
         elif [ "$UNATTENDED" = false ]; then
             printf "  %s  Active UFW firewall detected. Open ports %s (API) and %s (SFTP)? [Y/n] " "${GLYPH_PROMPT}" "${API_PORT}" "${SFTP_PORT}"
-            local ans
-            read -r ans
+            local ans=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r ans </dev/tty || true
+            else
+                read -r ans || true
+            fi
             ans="${ans:-y}"
             [[ "$ans" =~ ^[Yy]$ ]] && should_open=true
         fi
@@ -930,8 +976,12 @@ configure_firewall() {
             should_open=true
         elif [ "$UNATTENDED" = false ] && [ "$configured" = false ]; then
             printf "  %s  Active firewalld detected. Open ports %s (API) and %s (SFTP)? [Y/n] " "${GLYPH_PROMPT}" "${API_PORT}" "${SFTP_PORT}"
-            local ans
-            read -r ans
+            local ans=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r ans </dev/tty || true
+            else
+                read -r ans || true
+            fi
             ans="${ans:-y}"
             [[ "$ans" =~ ^[Yy]$ ]] && should_open=true
         fi
