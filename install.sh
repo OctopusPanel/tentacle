@@ -677,7 +677,7 @@ provision_binary() {
         return 0
     fi
 
-    # 3. Download precompiled binary from Panel or GitHub Releases
+    # 3. Download precompiled binary from GitHub Releases
     local tmp_dir
     tmp_dir="$(mktemp -d /tmp/tentacle-install.XXXXXX)"
     # shellcheck disable=SC2064
@@ -686,15 +686,7 @@ provision_binary() {
     local tag="${TARGET_VERSION}"
     local candidate_urls=()
 
-    # Panel-hosted distribution if available
-    if [ -n "$PANEL_URL" ]; then
-        candidate_urls+=("${PANEL_URL}/api/v1/system/downloads/tentacle-${TARGET_ARCH}.tar.gz")
-        candidate_urls+=("${PANEL_URL}/api/v1/system/downloads/tentacle-${TARGET_ARCH}")
-        candidate_urls+=("${PANEL_URL}/downloads/tentacle-${TARGET_ARCH}.tar.gz")
-        candidate_urls+=("${PANEL_URL}/downloads/tentacle-${TARGET_ARCH}")
-    fi
-
-    # GitHub Releases
+    # Prioritize official GitHub Releases
     if [ "$tag" != "latest" ]; then
         candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}.tar.gz")
         candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}")
@@ -708,20 +700,32 @@ provision_binary() {
             if curl -fsSL "${dl_url}" -o "${tmp_dir}/tentacle.tar.gz" >> "${LOG_FILE}" 2>&1; then
                 # Optional checksum check
                 local sha_url="${dl_url}.sha256"
-                if curl -fsSL "${sha_url}" -o "${tmp_dir}/tentacle.tar.gz.sha256" >> "${LOG_FILE}" 2>&1; then
+                if curl -fsSL "${sha_url}" -o "${tmp_dir}/tentacle.sha256" >> "${LOG_FILE}" 2>&1; then
                     echo "Verifying SHA256 checksum..." >> "${LOG_FILE}"
-                    (cd "${tmp_dir}" && sha256sum -c "tentacle.tar.gz.sha256") >> "${LOG_FILE}" 2>&1 || true
+                    local expected_sha
+                    expected_sha="$(awk '{print $1}' "${tmp_dir}/tentacle.sha256" 2>/dev/null || true)"
+                    local actual_sha
+                    actual_sha="$(sha256sum "${tmp_dir}/tentacle.tar.gz" 2>/dev/null | awk '{print $1}' || true)"
+                    if [ -n "$expected_sha" ] && [ "$expected_sha" != "$actual_sha" ]; then
+                        echo "Checksum verification failed: expected ${expected_sha}, got ${actual_sha}" >> "${LOG_FILE}"
+                        continue
+                    fi
+                    echo "Checksum verified: ${actual_sha}" >> "${LOG_FILE}"
                 fi
                 tar -xzf "${tmp_dir}/tentacle.tar.gz" -C "${tmp_dir}" >> "${LOG_FILE}" 2>&1
                 if [ -f "${tmp_dir}/tentacle" ]; then
-                    install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
-                    return 0
+                    if head -c 4 "${tmp_dir}/tentacle" 2>/dev/null | grep -q "ELF"; then
+                        install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+                        return 0
+                    fi
                 fi
             fi
         else
             if curl -fsSL "${dl_url}" -o "${tmp_dir}/tentacle" >> "${LOG_FILE}" 2>&1; then
-                install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
-                return 0
+                if head -c 4 "${tmp_dir}/tentacle" 2>/dev/null | grep -q "ELF"; then
+                    install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+                    return 0
+                fi
             fi
         fi
     done
