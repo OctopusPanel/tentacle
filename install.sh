@@ -54,15 +54,15 @@ TARGET_ARCH=""
 # Color Palette & Typography
 # ------------------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    CLR_RESET="\033[0m"
-    CLR_BOLD="\033[1m"
-    CLR_DIM="\033[2m"
-    CLR_CYAN="\033[38;2;0;240;255m"      # #00F0FF / ANSI 14
-    CLR_PURPLE="\033[38;2;189;147;249m"  # #BD93F9 / ANSI 13
-    CLR_GREEN="\033[38;2;80;250;123m"    # #50FA7B / ANSI 10
-    CLR_YELLOW="\033[38;2;241;250;140m"  # #F1FA8C / ANSI 11
-    CLR_RED="\033[38;2;255;85;85m"       # #FF5555 / ANSI 9
-    CLR_GRAY="\033[38;2;98;114;164m"     # #6272A4 / ANSI 8
+    CLR_RESET=$'\033[0m'
+    CLR_BOLD=$'\033[1m'
+    CLR_DIM=$'\033[2m'
+    CLR_CYAN=$'\033[38;2;0;240;255m'      # #00F0FF / ANSI 14
+    CLR_PURPLE=$'\033[38;2;189;147;249m'  # #BD93F9 / ANSI 13
+    CLR_GREEN=$'\033[38;2;80;250;123m'    # #50FA7B / ANSI 10
+    CLR_YELLOW=$'\033[38;2;241;250;140m'  # #F1FA8C / ANSI 11
+    CLR_RED=$'\033[38;2;255;85;85m'       # #FF5555 / ANSI 9
+    CLR_GRAY=$'\033[38;2;98;114;164m'     # #6272A4 / ANSI 8
 else
     CLR_RESET=""
     CLR_BOLD=""
@@ -812,14 +812,26 @@ stage_provisioning() {
 # Stage 5: Node Configuration Wizard ([5/6])
 # ------------------------------------------------------------------------------
 stage_config_wizard() {
+    # If parameters were provided via CLI flags or stdin is not a terminal, switch to unattended mode
+    if [ -n "$PANEL_URL" ] && [ -n "$NODE_TOKEN" ]; then
+        UNATTENDED=true
+    fi
+    if [ ! -t 0 ] && [ ! -r /dev/tty ]; then
+        UNATTENDED=true
+    fi
+
     # If interactive and missing panel-url or token, offer 1-click token string paste
     if [ "$UNATTENDED" = false ] && { [ -z "$PANEL_URL" ] || [ -z "$NODE_TOKEN" ]; }; then
         printf "\n"
         printf "  %s  ${CLR_BOLD}OctopusPanel Node Configuration${CLR_RESET}\n" "${GLYPH_PROMPT}"
         printf "     ${CLR_GRAY}Paste the 1-click setup string from OctopusPanel UI, or press Enter for step-by-step setup:${CLR_RESET}\n"
         printf "     > "
-        local quick_input
-        read -r quick_input
+        local quick_input=""
+        if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+            read -r quick_input </dev/tty || true
+        else
+            read -r quick_input || true
+        fi
         if [ -n "$quick_input" ]; then
             parse_quick_input "$quick_input"
         fi
@@ -830,7 +842,11 @@ stage_config_wizard() {
         # 1. Panel URL
         while [ -z "$PANEL_URL" ]; do
             printf "  %s  Panel URL (e.g., https://panel.example.com): " "${GLYPH_PROMPT}"
-            read -r PANEL_URL
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r PANEL_URL </dev/tty || true
+            else
+                read -r PANEL_URL || true
+            fi
             if [ -n "$PANEL_URL" ]; then
                 if [[ ! "$PANEL_URL" =~ ^https?:// ]]; then
                     printf "     ${CLR_YELLOW}Panel URL must start with http:// or https://${CLR_RESET}\n"
@@ -842,7 +858,11 @@ stage_config_wizard() {
         # 2. Node Authentication Token
         while [ -z "$NODE_TOKEN" ]; do
             printf "  %s  Node Authentication Secret / Token: " "${GLYPH_PROMPT}"
-            read -r NODE_TOKEN
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r NODE_TOKEN </dev/tty || true
+            else
+                read -r NODE_TOKEN || true
+            fi
             if [ -z "$NODE_TOKEN" ]; then
                 printf "     ${CLR_YELLOW}Authentication token cannot be empty.${CLR_RESET}\n"
             fi
@@ -851,21 +871,36 @@ stage_config_wizard() {
         # 3. API Port
         if [ -z "$API_PORT" ]; then
             printf "  %s  API Listen Port [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_API_PORT}"
-            read -r input_port
+            local input_port=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r input_port </dev/tty || true
+            else
+                read -r input_port || true
+            fi
             API_PORT="${input_port:-$DEFAULT_API_PORT}"
         fi
 
         # 4. SFTP Port
         if [ -z "$SFTP_PORT" ]; then
             printf "  %s  SFTP Listen Port [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_SFTP_PORT}"
-            read -r input_sftp
+            local input_sftp=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r input_sftp </dev/tty || true
+            else
+                read -r input_sftp || true
+            fi
             SFTP_PORT="${input_sftp:-$DEFAULT_SFTP_PORT}"
         fi
 
         # 5. Storage Path
         if [ -z "$STORAGE_PATH" ]; then
             printf "  %s  Container Storage Root [%s]: " "${GLYPH_PROMPT}" "${DEFAULT_STORAGE_PATH}"
-            read -r input_storage
+            local input_storage=""
+            if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+                read -r input_storage </dev/tty || true
+            else
+                read -r input_storage || true
+            fi
             STORAGE_PATH="${input_storage:-$DEFAULT_STORAGE_PATH}"
         fi
     fi
