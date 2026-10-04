@@ -147,6 +147,14 @@ impl ContainerEngine {
                 .push(binding);
         }
 
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("chown")
+                .args(["-R", "1000:1000"])
+                .arg(&volume_path)
+                .status();
+        }
+
         let volume_bind = format!("{}:/home/container:rw", volume_path.to_string_lossy());
         let binds = vec![volume_bind];
 
@@ -179,6 +187,7 @@ impl ContainerEngine {
 
         let container_config = BollardContainerConfig {
             image: Some(config.docker_image.clone()),
+            user: Some("1000:1000".to_string()),
             cmd: Some(vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
@@ -409,6 +418,14 @@ impl ContainerEngine {
 
         // Cleanup install container
         let _ = self.remove_container(&install_id).await;
+
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("chown")
+                .args(["-R", "1000:1000"])
+                .arg(volume_path)
+                .status();
+        }
 
         if exit_code == 0 {
             info!("Installation pipeline completed successfully for {}", server_id);

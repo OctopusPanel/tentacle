@@ -16,6 +16,7 @@ pub struct WsIncomingMessage {
     pub event: String,
     pub command: Option<String>,
     pub action: Option<String>,
+    pub args: Option<Vec<String>>,
 }
 
 pub async fn ws_handler(
@@ -129,8 +130,11 @@ async fn handle_socket(
                 if let Ok(incoming) = serde_json::from_str::<WsIncomingMessage>(&text) {
                     match incoming.event.as_str() {
                         "send_command" => {
-                            if let Some(cmd) = incoming.command {
-                                let _ = stdin_tx.send(cmd).await;
+                            let cmd = incoming.command.or_else(|| {
+                                incoming.args.and_then(|a| a.into_iter().next())
+                            });
+                            if let Some(cmd) = cmd {
+                                let _ = stdin_tx.send(cmd);
                             }
                         }
                         "power" => {
