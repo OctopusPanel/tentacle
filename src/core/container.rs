@@ -153,6 +153,7 @@ impl ContainerEngine {
             cpu_period: config.cpu_period,
             network_mode: Some(self.network_name.clone()),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+            dns: Some(vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()]),
             ..Default::default()
         };
 
@@ -320,6 +321,7 @@ impl ContainerEngine {
         let host_config = HostConfig {
             binds: Some(vec![volume_bind]),
             network_mode: Some("bridge".to_string()),
+            dns: Some(vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()]),
             ..Default::default()
         };
 
