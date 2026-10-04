@@ -54,15 +54,15 @@ TARGET_ARCH=""
 # Color Palette & Typography
 # ------------------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    CLR_RESET=$'\033[0m'
-    CLR_BOLD=$'\033[1m'
-    CLR_DIM=$'\033[2m'
-    CLR_CYAN=$'\033[38;2;0;240;255m'      # #00F0FF / ANSI 14
-    CLR_PURPLE=$'\033[38;2;189;147;249m'  # #BD93F9 / ANSI 13
-    CLR_GREEN=$'\033[38;2;80;250;123m'    # #50FA7B / ANSI 10
-    CLR_YELLOW=$'\033[38;2;241;250;140m'  # #F1FA8C / ANSI 11
-    CLR_RED=$'\033[38;2;255;85;85m'       # #FF5555 / ANSI 9
-    CLR_GRAY=$'\033[38;2;98;114;164m'     # #6272A4 / ANSI 8
+    CLR_RESET="\033[0m"
+    CLR_BOLD="\033[1m"
+    CLR_DIM="\033[2m"
+    CLR_CYAN="\033[38;2;0;240;255m"      # #00F0FF / ANSI 14
+    CLR_PURPLE="\033[38;2;189;147;249m"  # #BD93F9 / ANSI 13
+    CLR_GREEN="\033[38;2;80;250;123m"    # #50FA7B / ANSI 10
+    CLR_YELLOW="\033[38;2;241;250;140m"  # #F1FA8C / ANSI 11
+    CLR_RED="\033[38;2;255;85;85m"       # #FF5555 / ANSI 9
+    CLR_GRAY="\033[38;2;98;114;164m"     # #6272A4 / ANSI 8
 else
     CLR_RESET=""
     CLR_BOLD=""
@@ -677,58 +677,58 @@ provision_binary() {
         return 0
     fi
 
-    # 3. Download from GitHub Releases
+    # 3. Download precompiled binary from Panel or GitHub Releases
     local tmp_dir
     tmp_dir="$(mktemp -d /tmp/tentacle-install.XXXXXX)"
     # shellcheck disable=SC2064
     trap "rm -rf '${tmp_dir}'" RETURN
 
     local tag="${TARGET_VERSION}"
-    local download_url=""
+    local candidate_urls=()
 
-    if [ "$tag" = "latest" ]; then
-        download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}.tar.gz"
-    else
-        download_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}.tar.gz"
+    # Panel-hosted distribution if available
+    if [ -n "$PANEL_URL" ]; then
+        candidate_urls+=("${PANEL_URL}/api/v1/system/downloads/tentacle-${TARGET_ARCH}.tar.gz")
+        candidate_urls+=("${PANEL_URL}/api/v1/system/downloads/tentacle-${TARGET_ARCH}")
+        candidate_urls+=("${PANEL_URL}/downloads/tentacle-${TARGET_ARCH}.tar.gz")
+        candidate_urls+=("${PANEL_URL}/downloads/tentacle-${TARGET_ARCH}")
     fi
 
-    echo "Attempting download from: ${download_url}" >> "${LOG_FILE}"
+    # GitHub Releases
+    if [ "$tag" != "latest" ]; then
+        candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}.tar.gz")
+        candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}")
+    fi
+    candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}.tar.gz")
+    candidate_urls+=("https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}")
 
-    if curl -fsSL "${download_url}" -o "${tmp_dir}/tentacle.tar.gz" >> "${LOG_FILE}" 2>&1; then
-        # Check for optional checksum file
-        local sha_url="${download_url}.sha256"
-        if curl -fsSL "${sha_url}" -o "${tmp_dir}/tentacle.tar.gz.sha256" >> "${LOG_FILE}" 2>&1; then
-            echo "Verifying SHA256 checksum..." >> "${LOG_FILE}"
-            (cd "${tmp_dir}" && sha256sum -c "tentacle.tar.gz.sha256") >> "${LOG_FILE}" 2>&1 || {
-                echo "Checksum verification failed" >> "${LOG_FILE}"
-                return 1
-            }
+    for dl_url in "${candidate_urls[@]}"; do
+        echo "Attempting precompiled download from: ${dl_url}" >> "${LOG_FILE}"
+        if [[ "${dl_url}" =~ \.tar\.gz$ ]]; then
+            if curl -fsSL "${dl_url}" -o "${tmp_dir}/tentacle.tar.gz" >> "${LOG_FILE}" 2>&1; then
+                # Optional checksum check
+                local sha_url="${dl_url}.sha256"
+                if curl -fsSL "${sha_url}" -o "${tmp_dir}/tentacle.tar.gz.sha256" >> "${LOG_FILE}" 2>&1; then
+                    echo "Verifying SHA256 checksum..." >> "${LOG_FILE}"
+                    (cd "${tmp_dir}" && sha256sum -c "tentacle.tar.gz.sha256") >> "${LOG_FILE}" 2>&1 || true
+                fi
+                tar -xzf "${tmp_dir}/tentacle.tar.gz" -C "${tmp_dir}" >> "${LOG_FILE}" 2>&1
+                if [ -f "${tmp_dir}/tentacle" ]; then
+                    install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+                    return 0
+                fi
+            fi
+        else
+            if curl -fsSL "${dl_url}" -o "${tmp_dir}/tentacle" >> "${LOG_FILE}" 2>&1; then
+                install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
+                return 0
+            fi
         fi
+    done
 
-        tar -xzf "${tmp_dir}/tentacle.tar.gz" -C "${tmp_dir}" >> "${LOG_FILE}" 2>&1
-        if [ -f "${tmp_dir}/tentacle" ]; then
-            install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
-            return 0
-        fi
-    fi
-
-    # 4. Fallback: Direct binary release download
-    local direct_url=""
-    if [ "$tag" = "latest" ]; then
-        direct_url="https://github.com/${GITHUB_REPO}/releases/latest/download/tentacle-${TARGET_ARCH}"
-    else
-        direct_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}/tentacle-${TARGET_ARCH}"
-    fi
-
-    echo "Attempting direct binary download from: ${direct_url}" >> "${LOG_FILE}"
-    if curl -fsSL "${direct_url}" -o "${tmp_dir}/tentacle" >> "${LOG_FILE}" 2>&1; then
-        install -m 0755 "${tmp_dir}/tentacle" "${BINARY_PATH}"
-        return 0
-    fi
-
-    # 5. Fallback: Build with local Cargo if available in repository
+    # 4. Fallback: Build with local Cargo if repository is present locally
     if [ -f "${script_dir}/Cargo.toml" ] && command -v cargo &>/dev/null; then
-        echo "Building release binary via local Cargo..." >> "${LOG_FILE}"
+        echo "Building release binary via local Cargo repository..." >> "${LOG_FILE}"
         cargo build --release --manifest-path "${script_dir}/Cargo.toml" >> "${LOG_FILE}" 2>&1
         if [ -f "${script_dir}/target/release/tentacle" ]; then
             install -m 0755 "${script_dir}/target/release/tentacle" "${BINARY_PATH}"
@@ -736,8 +736,20 @@ provision_binary() {
         fi
     fi
 
-    # 6. Fallback: Automated build via cargo from GitHub repository
-    echo "Attempting to build Tentacle from git repository..." >> "${LOG_FILE}"
+    # 5. Fallback: Automated source build via Cargo (Requires >= 1500MB free disk)
+    local free_mb=0
+    if command -v df &>/dev/null; then
+        free_mb="$(df -m / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
+    fi
+
+    if [ "$free_mb" -lt 1500 ]; then
+        echo "Precompiled binary unavailable and insufficient disk space on / (${free_mb}MB free, 1500MB needed for compilation)." >> "${LOG_FILE}"
+        show_error_box "[4/6]" "Precompiled binary unavailable & insufficient disk space" \
+            "No release binary found on GitHub/Panel, and host has only ${free_mb}MB free (needs ~1.5GB to build from source). Please publish GitHub release ${tag} or specify --local-binary."
+        exit 1
+    fi
+
+    echo "Precompiled binary not yet published. Building Tentacle from git repository..." >> "${LOG_FILE}"
     if ! command -v cargo &>/dev/null && [ ! -f "${HOME}/.cargo/bin/cargo" ]; then
         echo "Cargo not found. Provisioning minimal Rust compiler toolchain..." >> "${LOG_FILE}"
         case "$OS_FAMILY" in
@@ -768,6 +780,8 @@ provision_binary() {
                 return 0
             fi
         fi
+        # Clean up crates.io unpack directory on failed build to prevent disk exhaustion
+        rm -rf "${HOME}/.cargo/registry/src" 2>/dev/null || true
     fi
 
     echo "Failed to acquire Tentacle binary through release downloads or local builds." >> "${LOG_FILE}"
