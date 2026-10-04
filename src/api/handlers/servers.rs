@@ -89,29 +89,35 @@ pub async fn power_action(
     Json(payload): Json<PowerActionPayload>,
 ) -> Result<Json<Value>, TentacleError> {
     let server = state.get_server(&id).await?;
-    let cid = {
-        let lock = server.container_id.read().await;
-        lock.clone()
-            .ok_or_else(|| TentacleError::ContainerNotFound("No container associated with server".to_string()))?
-    };
-
     let stop_timeout = { server.config.read().await.stop_timeout_secs };
 
     match payload.action.to_lowercase().as_str() {
         "start" => {
+            let cid = state.ensure_container_and_stream(&server).await?;
             server.set_status(ServerStatus::Starting).await;
             state.docker.start_container(&cid).await?;
         }
         "stop" => {
+            let cid = {
+                let lock = server.container_id.read().await;
+                lock.clone()
+                    .ok_or_else(|| TentacleError::ContainerNotFound("No container associated with server".to_string()))?
+            };
             server.set_status(ServerStatus::Stopping).await;
             state.docker.stop_container_graceful(&cid, stop_timeout).await?;
             server.set_status(ServerStatus::Offline).await;
         }
         "restart" => {
+            let cid = state.ensure_container_and_stream(&server).await?;
             server.set_status(ServerStatus::Starting).await;
             state.docker.restart_container(&cid, stop_timeout).await?;
         }
         "kill" => {
+            let cid = {
+                let lock = server.container_id.read().await;
+                lock.clone()
+                    .ok_or_else(|| TentacleError::ContainerNotFound("No container associated with server".to_string()))?
+            };
             state.docker.kill_container(&cid).await?;
             server.set_status(ServerStatus::Offline).await;
         }

@@ -119,7 +119,7 @@ impl StreamSession {
             stdout: Some(true),
             stderr: Some(true),
             stream: Some(true),
-            logs: Some(false),
+            logs: Some(true),
             detach_keys: None,
         };
 

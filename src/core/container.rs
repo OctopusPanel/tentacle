@@ -128,8 +128,14 @@ impl ContainerEngine {
             let key = format!("{}/{}", alloc.container_port, alloc.protocol.to_lowercase());
             exposed_ports.insert(key.clone(), HashMap::new());
 
+            let host_ip = if alloc.host_ip == "127.0.0.1" {
+                "127.0.0.1".to_string()
+            } else {
+                "0.0.0.0".to_string()
+            };
+
             let binding = PortBinding {
-                host_ip: Some(alloc.host_ip.clone()),
+                host_ip: Some(host_ip),
                 host_port: Some(alloc.host_port.to_string()),
             };
 

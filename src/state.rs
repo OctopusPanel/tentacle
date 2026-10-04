@@ -55,6 +55,54 @@ impl AppState {
         session_arc
     }
 
+    pub async fn ensure_container_and_stream(
+        &self,
+        server: &Arc<Server>,
+    ) -> Result<String, TentacleError> {
+        let mut cid_lock = server.container_id.write().await;
+        let cid = match cid_lock.as_ref() {
+            Some(existing_id) => {
+                if self.docker.client().inspect_container(existing_id, None).await.is_ok() {
+                    existing_id.clone()
+                } else {
+                    let config = server.config.read().await.clone();
+                    let volume_path = server.fs.root().to_path_buf();
+                    let new_id = self.docker.create_game_container(&config, &volume_path).await?;
+                    *cid_lock = Some(new_id.clone());
+                    new_id
+                }
+            }
+            None => {
+                let config = server.config.read().await.clone();
+                let volume_path = server.fs.root().to_path_buf();
+                let new_id = self.docker.create_game_container(&config, &volume_path).await?;
+                *cid_lock = Some(new_id.clone());
+                new_id
+            }
+        };
+
+        let server_id = server.config.read().await.id.clone();
+        let session = self.get_or_create_stream(&server_id).await;
+        let (_, stdin_rx) = tokio::sync::mpsc::channel(128);
+        let docker_client = self.docker.client().clone();
+        let server_clone = server.clone();
+        let session_clone = session.clone();
+        let cid_clone = cid.clone();
+
+        tokio::spawn(async move {
+            let _ = StreamSession::attach_and_run(
+                &docker_client,
+                &cid_clone,
+                server_clone,
+                session_clone,
+                stdin_rx,
+            )
+            .await;
+        });
+
+        Ok(cid)
+    }
+
     pub async fn create_server(&self, config: ServerConfig) -> Result<Arc<Server>, TentacleError> {
         let volume_path = self.config.storage.volumes_path.join(&config.id);
         let fs = SandboxedFs::new(&volume_path)?;

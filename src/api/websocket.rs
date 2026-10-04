@@ -60,6 +60,7 @@ async fn handle_socket(
     let initial_status = server.get_status().await;
     let status_msg = json!({
         "event": "status",
+        "args": [initial_status],
         "data": initial_status
     });
     let _ = ws_sender.send(Message::Text(status_msg.to_string().into())).await;
@@ -72,7 +73,8 @@ async fn handle_socket(
 
     for line in snapshot {
         let console_msg = json!({
-            "event": "console",
+            "event": "console_output",
+            "args": [line.clone()],
             "data": line
         });
         if ws_sender.send(Message::Text(console_msg.to_string().into())).await.is_err() {
@@ -90,7 +92,8 @@ async fn handle_socket(
             tokio::select! {
                 Ok(log_msg) = log_rx.recv() => {
                     let payload = json!({
-                        "event": "console",
+                        "event": "console_output",
+                        "args": [log_msg.data.clone()],
                         "data": log_msg.data,
                         "stream": log_msg.stream,
                         "timestamp": log_msg.timestamp
@@ -103,6 +106,7 @@ async fn handle_socket(
                     if metric.server_id == sid_for_metrics {
                         let payload = json!({
                             "event": "stats",
+                            "args": [metric.clone()],
                             "data": metric
                         });
                         if ws_sender.send(Message::Text(payload.to_string().into())).await.is_err() {
