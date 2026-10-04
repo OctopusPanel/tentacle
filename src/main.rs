@@ -45,6 +45,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Initialize Shared Application State
     let state = AppState::new(config.clone())?;
 
+    // Restore any existing servers from persistent storage
+    if let Err(e) = state.restore_servers().await {
+        tracing::error!("Error restoring servers from persistent storage: {}", e);
+    }
+
     // 4. Start Metrics Poller
     let poll_interval = config.resources.metrics_poll_interval_secs;
     MetricsPoller::start_polling(

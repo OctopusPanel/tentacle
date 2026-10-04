@@ -5,7 +5,7 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use crate::config::Config;
 use crate::core::container::ContainerEngine;
 use crate::core::metrics::ContainerMetrics;
-use crate::core::server::{Server, ServerConfig};
+use crate::core::server::{Server, ServerConfig, ServerStatus};
 use crate::core::stream::StreamSession;
 use crate::error::TentacleError;
 use crate::fs::SandboxedFs;
@@ -99,6 +99,14 @@ impl AppState {
         )
         .await;
 
+        // Persist server configuration to disk
+        let servers_dir = self.config.storage.volumes_path.join("..").join("servers");
+        let _ = tokio::fs::create_dir_all(&servers_dir).await;
+        let config_file = servers_dir.join(format!("{}.json", config.id));
+        if let Ok(json_bytes) = serde_json::to_vec_pretty(&config) {
+            let _ = tokio::fs::write(&config_file, json_bytes).await;
+        }
+
         Ok(server)
     }
 
@@ -116,7 +124,12 @@ impl AppState {
             tokio::fs::remove_dir_all(&volume_path).await?;
         }
 
-        // 3. Remove from registry
+        // 3. Remove persistent config file
+        let servers_dir = self.config.storage.volumes_path.join("..").join("servers");
+        let config_file = servers_dir.join(format!("{}.json", id));
+        let _ = tokio::fs::remove_file(&config_file).await;
+
+        // 4. Remove from registry
         {
             let mut map = self.servers.write().await;
             map.remove(id);
@@ -124,6 +137,87 @@ impl AppState {
         {
             let mut streams = self.streams.write().await;
             streams.remove(id);
+        }
+
+        Ok(())
+    }
+
+    pub async fn restore_servers(&self) -> Result<(), TentacleError> {
+        let servers_dir = self.config.storage.volumes_path.join("..").join("servers");
+        if !servers_dir.exists() {
+            return Ok(());
+        }
+
+        let mut read_dir = match tokio::fs::read_dir(&servers_dir).await {
+            Ok(rd) => rd,
+            Err(_) => return Ok(()),
+        };
+        let mut server_configs = Vec::new();
+
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                    if let Ok(config) = serde_json::from_str::<ServerConfig>(&content) {
+                        server_configs.push(config);
+                    }
+                }
+            }
+        }
+
+        for config in server_configs {
+            let server_id = config.id.clone();
+            let volume_path = self.config.storage.volumes_path.join(&server_id);
+            let fs = match SandboxedFs::new(&volume_path) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    tracing::warn!("Failed to initialize sandboxed FS for server {}: {}", server_id, e);
+                    continue;
+                }
+            };
+
+            let server = Server::new(config.clone(), fs);
+            let container_name = format!("octopus-{}", server_id);
+
+            if let Ok(inspect) = self.docker.client().inspect_container(&container_name, None).await {
+                if let Some(cid) = inspect.id {
+                    {
+                        let mut cid_lock = server.container_id.write().await;
+                        *cid_lock = Some(cid.clone());
+                    }
+
+                    let state = inspect.state.and_then(|s| s.status);
+                    let status = match state {
+                        Some(bollard::models::ContainerStateStatusEnum::RUNNING) => ServerStatus::Running,
+                        Some(bollard::models::ContainerStateStatusEnum::RESTARTING) => ServerStatus::Starting,
+                        _ => ServerStatus::Offline,
+                    };
+                    server.set_status(status).await;
+
+                    // Initialize stream session
+                    let (session, stdin_rx) = StreamSession::new(1000);
+                    let session = Arc::new(session);
+                    {
+                        let mut streams = self.streams.write().await;
+                        streams.insert(server_id.clone(), session.clone());
+                    }
+
+                    let _ = StreamSession::attach_and_run(
+                        self.docker.client(),
+                        &cid,
+                        server.clone(),
+                        session,
+                        stdin_rx,
+                    )
+                    .await;
+                }
+            }
+
+            {
+                let mut map = self.servers.write().await;
+                map.insert(server_id.clone(), server.clone());
+            }
+            tracing::info!("Restored server '{}' ({}) from persistent storage", config.name, server_id);
         }
 
         Ok(())

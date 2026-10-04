@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use bollard::container::{
     Config as BollardContainerConfig, CreateContainerOptions, KillContainerOptions,
-    ListContainersOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+    ListContainersOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
     WaitContainerOptions,
 };
 use bollard::image::CreateImageOptions;
@@ -101,6 +101,25 @@ impl ContainerEngine {
         self.ensure_image(&config.docker_image).await?;
 
         let container_name = format!("octopus-{}", config.id);
+
+        if let Ok(existing) = self.client.inspect_container(&container_name, None).await {
+            if let Some(existing_id) = existing.id {
+                info!(
+                    "Found existing container '{}' ({}), removing stale instance before recreate",
+                    container_name, existing_id
+                );
+                let _ = self
+                    .client
+                    .remove_container(
+                        &existing_id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+            }
+        }
 
         let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
         let mut exposed_ports = HashMap::new();
@@ -247,11 +266,28 @@ impl ContainerEngine {
         server_id: &str,
         install_config: &InstallConfig,
         volume_path: &Path,
+        environment: &HashMap<String, String>,
     ) -> Result<(), TentacleError> {
         info!("Running installation pipeline for server {}", server_id);
         self.ensure_image(&install_config.image).await?;
 
         let install_name = format!("octopus-install-{}", server_id);
+
+        // Remove any stale install container if one already exists
+        if let Ok(existing) = self.client.inspect_container(&install_name, None).await {
+            if let Some(existing_id) = existing.id {
+                let _ = self
+                    .client
+                    .remove_container(
+                        &existing_id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+            }
+        }
 
         let volume_bind = format!("{}:/mnt/server:rw", volume_path.to_string_lossy());
         let host_config = HostConfig {
@@ -260,13 +296,21 @@ impl ContainerEngine {
             ..Default::default()
         };
 
+        let clean_script = install_config.script.replace("\r\n", "\n").replace('\r', "\n");
+        let shell = install_config
+            .entrypoint
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("/bin/sh")
+            .to_string();
+
+        let docker_env = EnvironmentInterpolator::to_docker_env(environment);
+
         let container_config = BollardContainerConfig {
             image: Some(install_config.image.clone()),
-            cmd: Some(vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                install_config.script.clone(),
-            ]),
+            entrypoint: Some(vec![shell]),
+            cmd: Some(vec!["-c".to_string(), clean_script]),
+            env: Some(docker_env),
             working_dir: Some("/mnt/server".to_string()),
             host_config: Some(host_config),
             ..Default::default()
@@ -303,6 +347,27 @@ impl ContainerEngine {
                 }
                 Err(e) => {
                     error!("Error while awaiting install container: {}", e);
+                }
+            }
+        }
+
+        // Fetch logs and log them to tracing
+        let mut log_stream = self.client.logs(
+            &install_id,
+            Some(LogsOptions::<String> {
+                stdout: true,
+                stderr: true,
+                tail: "100".to_string(),
+                ..Default::default()
+            }),
+        );
+
+        while let Some(log_result) = log_stream.next().await {
+            if let Ok(log_output) = log_result {
+                let text = log_output.to_string();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    info!("[Installer {}] {}", server_id, trimmed);
                 }
             }
         }
